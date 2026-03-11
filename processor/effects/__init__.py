@@ -33,7 +33,7 @@ from .mode_31_drift import apply_drift
 from .mode_32_underwater import apply_underwater
 from .mode_33_gradient import apply_gradient
 from .mode_34_colorize import apply_colorize
-from .mode_35_focus import apply_focus
+from .mode_35_typographic import apply_typographic
 
 EFFECTS = {
     1: apply_poster,
@@ -70,7 +70,7 @@ EFFECTS = {
     32: apply_underwater,
     33: apply_gradient,
     34: apply_colorize,
-    35: apply_focus
+    35: apply_typographic
 }
 
 

@@ -32,10 +32,12 @@ def main():
     print(f"\n{BOLD}{BLUE}МИНИМАЛИСТИЧНЫЙ АРТ-ГЕНЕРАТОР (ФОТО + ВИДЕО){RESET}")
     print(f"{MAGENTA}{'=' * 40}{RESET}")
     show_effects_table()
-    
-    args = sys.argv[1:]
+
+    # --- Получаем аргументы ---
+    # Убираем лишние кавычки, которые Windows иногда добавляет при "Открыть с помощью..."
+    args = [a.strip('"') for a in sys.argv[1:]]
     input_paths = []
-    
+
     # --- Сбор файлов ---
     if args:
         for a in args:
@@ -45,6 +47,7 @@ def main():
             else:
                 print(f"{YELLOW}Внимание: '{a}' → не найден или не файл — пропущен.{RESET}")
     else:
+        # Только если аргументов нет, вызываем диалог выбора
         raw_paths = select_images_via_dialog(multi=True)
         for p in raw_paths:
             resolved = resolve_shortcut(p)
@@ -52,7 +55,7 @@ def main():
                 input_paths.append(resolved)
             else:
                 print(f"{YELLOW}Пропущен: {p}{RESET}")
-    
+
     if not input_paths:
         print(f"{RED}Файлы не выбраны. Выход.{RESET}")
         return
@@ -143,4 +146,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n{RED}Критическая ошибка при запуске:{RESET}\n{e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print(f"\n{MAGENTA}{'=' * 40}{RESET}")
+        input(f"{YELLOW}Нажмите Enter, чтобы выйти...{RESET}")

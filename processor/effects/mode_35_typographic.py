@@ -6,7 +6,7 @@ import random
 # Набор символов от "плотных" к "лёгким"
 DENSITY_CHARS = "@#M&W8%B$OXA*+=-:. "
 
-def apply_focus(img, w=None, h=None, out_dir=None, base_name=None):
+def apply_typographic(img, w=None, h=None, out_dir=None, base_name=None):
     """
     Mode 35: Печатная машина (Typography Print)
     Полутоновая печать буквами вместо точек.
