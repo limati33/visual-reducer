@@ -1,287 +1,204 @@
-# processor/effects/mode_29_filter.py
 import os
-import re
+import math
 import cv2
 import numpy as np
 
-# ----------------------------
-# ВНУТРЕННЕЕ СОСТОЯНИЕ ЭФФЕКТА (для видео)
-# ----------------------------
-_STATE = {
-    "centers": None,          # все найденные центры (np.ndarray shape=(k,2))
-    "active_centers": None,   # отобранные центры для видео (<= max_variants)
-    "initialized": False,     # true после init для видео
-    "sample_frame_used": None # сохранённый кадр, на котором считались площади
-}
-
-
-def reset_state():
-    """Сброс внутреннего состояния — вызывать перед началом обработки нового видео."""
-    _STATE["centers"] = None
-    _STATE["active_centers"] = None
-    _STATE["initialized"] = False
-    _STATE["sample_frame_used"] = None
-
-
-# ----------------------------
-# ВСПОМОГАТЕЛИ
-# ----------------------------
-def _is_probably_video(base_name):
-    """Небольшая эвристика: base_name вроде 'frame_123' -> video."""
-    if not base_name:
-        return False
-    return re.search(r'frame[_\-]?\d+', base_name) is not None
-
-
-def _compute_centers_on_frame(img, n_colors, min_saturation, min_value, max_sample=100_000):
-    """
-    Запускает kmeans на image и возвращает centers (в Lab a,b).
-    Возвращает None если нет достаточного количества цветных пикселей.
-    """
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-
-    valid_mask = cv2.inRange(
-        hsv,
-        np.array([0, min_saturation, min_value], dtype=np.uint8),
-        np.array([180, 255, 255], dtype=np.uint8)
-    )
-
-    if cv2.countNonZero(valid_mask) < (img.shape[0] * img.shape[1] * 0.005):
-        return None
-
-    ab = lab[:, :, 1:3]
-    masked_ab = ab[valid_mask > 0]
-
-    if masked_ab.shape[0] == 0:
-        return None
-
-    if masked_ab.shape[0] > max_sample:
-        rng = np.random.default_rng(42)
-        idx = rng.choice(masked_ab.shape[0], size=max_sample, replace=False)
-        masked_ab = masked_ab[idx]
-
-    data = np.float32(masked_ab)
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-
-    try:
-        _, _, centers = cv2.kmeans(data, n_colors, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
-    except Exception as e:
-        # На случай некорректного входа — вернуть None
-        return None
-
-    return centers  # shape (n_colors, 2) — a,b
-
-
-def _area_for_center_on_frame(center, lab_ab, valid_mask, color_threshold):
-    """
-    Вычисляет «площадь» маски для данного центра на заданном кадре.
-    lab_ab — (h,w,2) float32
-    valid_mask — uint8 mask
-    """
-    dist = np.sqrt(np.sum((lab_ab - center) ** 2, axis=2))
-    mask = np.clip((color_threshold - dist) / 5.0, 0.0, 1.0)
-    mask[valid_mask == 0] = 0.0
-    area = float(np.sum(mask)) / (lab_ab.shape[0] * lab_ab.shape[1])
-    return area
-
-
-def _lab_color_to_hex(center_ab):
-    """Побочная: получить hex (rgb) приблизительного цвета из LAB (для имен файлов)."""
-    p_lab = np.uint8([[[140, int(center_ab[0]), int(center_ab[1])]]])
-    p_bgr = cv2.cvtColor(p_lab, cv2.COLOR_LAB2BGR)[0, 0]
-    return f"{int(p_bgr[2]):02x}{int(p_bgr[1]):02x}{int(p_bgr[0]):02x}"
-
-
-# ----------------------------
-# ГЛАВНАЯ ФУНКЦИЯ
-# ----------------------------
 def apply_filter(
     img,
     w=None, h=None,
     out_dir=None, base_name=None,
-
-    # Параметры эффекта (можно менять)
-    n_colors=10,
-    min_saturation=80,
-    min_value=50,
-    color_threshold=15,
-    min_area_ratio=0.005,
-    blur_mask=True,
-
-    # Видео/фото поведение
-    video_mode=None,        # None = определяем автоматически по base_name, True/False = принудительно
-    max_variants=None,      # None = без лимита (фото), integer = максимум вариантов (видео: <=5)
-    save_debug=False,       # Сохранять PNG для каждого варианта (когда применимо)
-    return_multiple=False   # Для фото: вернуть список вариантов; для видео+True: вернуть list (до max_variants)
+    n_seeds=120,
+    downscale=2,
+    cell_edge_blur=3,
+    seed_jitter=0.12,
+    color_smooth=0.85,
+    radial_strength=0.7,
+    shift_amount=6,
+    paper_noise=6,
+    return_multiple=False,
+    save_debug=False
 ):
-    """
-    Универсальный фильтр для фото и видео.
-
-    Возвращаемое значение:
-      - Фото (video_mode=False): список numpy.ndarray с вариантами (можно выбрать первый)
-      - Видео (video_mode=True, return_multiple=False): единый numpy.ndarray (лучший вариант)
-      - Видео (video_mode=True, return_multiple=True): список (до max_variants) numpy.ndarray
-
-    Совместимость: process_video ожидает, что функция принимает (img, w, h, out_dir, base_name).
-    Поэтому video_mode и проч. можно не передавать — видео будет распознано по base_name.
-    """
     if img is None:
         return None
 
-    # Resize если переданы w,h
-    img_h, img_w = img.shape[:2]
-    if w and h and (img_w != w or img_h != h):
+    ih0, iw0 = img.shape[:2]
+    if w and h and (iw0 != w or ih0 != h):
         img = cv2.resize(img, (int(w), int(h)), interpolation=cv2.INTER_AREA)
-        img_h, img_w = img.shape[:2]
+    ih, iw = img.shape[:2]
 
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
+    # downscale
+    ds = max(1, int(downscale))
+    ws, hs = max(1, iw // ds), max(1, ih // ds)
+    # make sure we have at least 1x1
+    ws = max(1, ws); hs = max(1, hs)
+    small = cv2.resize(img, (ws, hs), interpolation=cv2.INTER_AREA)
+    small_f = small.astype(np.float32)
 
-    # Детект видео или использовать переданный флаг
-    if video_mode is None:
-        video_mode = _is_probably_video(base_name)
+    # grey normalized
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    gray_norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    # Ограничение max_variants для видео (по условию — не более 5)
-    if video_mode:
-        if max_variants is None:
-            max_variants = 5
-        else:
-            max_variants = min(5, int(max_variants))
+    # good corners
+    max_corners = max(20, int(n_seeds * 0.6))
+    corners = cv2.goodFeaturesToTrack(gray_norm, maxCorners=max_corners, qualityLevel=0.01, minDistance=8)
+    seeds = []
+    if corners is not None:
+        for c in corners.reshape(-1,2):
+            seeds.append((int(c[0]), int(c[1])))
 
-    # Подготовка базовых матриц
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    valid_mask = cv2.inRange(
-        hsv,
-        np.array([0, min_saturation, min_value], dtype=np.uint8),
-        np.array([180, 255, 255], dtype=np.uint8)
-    )
+    # RNG
+    rng = np.random.default_rng(12345)
+    while len(seeds) < n_seeds:
+        x = int(rng.integers(0, ws))
+        y = int(rng.integers(0, hs))
+        prob = (gray_norm[y, x] / 255.0) * 0.6 + 0.2
+        if rng.random() < prob:
+            seeds.append((x, y))
+    seeds = seeds[:n_seeds]
 
-    gray_3ch = cv2.cvtColor(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    lab_ab = lab[:, :, 1:3].astype(np.float32)
-    img_f = img.astype(np.float32)
-    gray_f = gray_3ch.astype(np.float32)
+    # jitter
+    pts = np.array(seeds, dtype=np.float32)
+    if len(pts) > 1 and seed_jitter > 0:
+        # compute avg_dist on some neighbour pairs
+        dists = []
+        ncheck = min(200, len(pts)-1)
+        for i in range(ncheck):
+            a = pts[i]
+            b = pts[(i+1) % len(pts)]
+            dists.append(np.hypot(a[0]-b[0], a[1]-b[1]))
+        avg_dist = max(1.0, float(np.mean(dists)) if dists else math.hypot(ws, hs)/10.0)
+        jitter_px = seed_jitter * avg_dist
+        jitter = rng.normal(0, jitter_px, size=pts.shape).astype(np.float32)
+        pts = np.clip(pts + jitter, [0,0], [ws-1, hs-1])
 
-    # ----------------------------
-    # ИНИЦИАЛИЗАЦИЯ ДЛЯ ВИДЕО (один раз)
-    # ----------------------------
-    if video_mode:
-        if not _STATE["initialized"]:
-            centers = _compute_centers_on_frame(img, n_colors, min_saturation, min_value)
-            if centers is None:
-                # ничего интересного — возвращаем серый кадр/вариант
-                if return_multiple and not video_mode:
-                    return [gray_3ch]
-                return gray_3ch
-            # вычисляем площади для каждого центра на этом кадре
-            stats = []
-            for c in centers:
-                area = _area_for_center_on_frame(c, lab_ab, valid_mask, color_threshold)
-                stats.append((area, c))
-            # сортируем по убыванию площади
-            stats.sort(key=lambda x: x[0], reverse=True)
-            sorted_centers = [c for a, c in stats if a >= min_area_ratio]
-            if not sorted_centers:
-                # ничего значимого — вернём серый
-                if return_multiple and not video_mode:
-                    return [gray_3ch]
-                return gray_3ch
+    k = len(pts)
 
-            _STATE["centers"] = np.array(sorted_centers, dtype=np.float32)
-            # active_centers — top N (max_variants) или все
-            if max_variants is not None:
-                _STATE["active_centers"] = _STATE["centers"][:max_variants].copy()
-            else:
-                _STATE["active_centers"] = _STATE["centers"].copy()
-            _STATE["sample_frame_used"] = img.copy()
-            _STATE["initialized"] = True
+    # ===== memory saver: compute Voronoi assignment incrementally (no big dist2) =====
+    xs, ys = np.meshgrid(np.arange(ws, dtype=np.float32), np.arange(hs, dtype=np.float32))
+    # min distance initialized to +inf
+    min_dist = np.full((hs, ws), np.inf, dtype=np.float32)
+    idx = np.full((hs, ws), -1, dtype=np.int32)
 
-        centers_to_use = _STATE["active_centers"]
+    for i in range(k):
+        sx = float(pts[i,0]); sy = float(pts[i,1])
+        dx = xs - sx
+        dy = ys - sy
+        d2 = dx*dx + dy*dy  # (hs,ws) float32
+        mask_update = d2 < min_dist
+        if np.any(mask_update):
+            # update where this seed is closer
+            min_dist[mask_update] = d2[mask_update]
+            idx[mask_update] = i
+
+    # pre-split channels once
+    bch = cv2.split(small)  # uint8 channels
+    # prepare accumulators in float32
+    result_small = np.zeros_like(small_f, dtype=np.float32)  # what we add as coloured blocks
+    blended_small = small_f.copy()  # original reduced (will be multiplied-down in-place)
+
+    # Precompute noise (float32)
+    noise = rng.normal(size=(hs, ws)).astype(np.float32)
+    # Blur noise
+    sigma_noise = max(0.5, ws * 0.02)
+    noise = cv2.GaussianBlur(noise, (0,0), sigma_noise)
+    # normalize to -1..1
+    nmin, nmax = float(noise.min()), float(noise.max())
+    if nmax - nmin > 1e-6:
+        noise = 2.0*(noise - nmin)/(nmax - nmin) - 1.0
     else:
-        # Фото: один раз считаем центры на текущем изображении
-        centers = _compute_centers_on_frame(img, n_colors, min_saturation, min_value)
-        if centers is None:
-            return [gray_3ch] if return_multiple else gray_3ch
-        centers_to_use = centers
+        noise.fill(0.0)
 
-    # ----------------------------
-    # ПРИМЕНЕНИЕ: создаём варианты для каждого центра в centers_to_use
-    # ----------------------------
-    results = []  # список (area, res_img, center)
-    for center in centers_to_use:
-        # дистанция и маска
-        dist = np.sqrt(np.sum((lab_ab - center) ** 2, axis=2))
-        mask = np.clip((color_threshold - dist) / 5.0, 0.0, 1.0)
-        mask[valid_mask == 0] = 0.0
-
-        area = float(np.sum(mask)) / (img_w * img_h)
-        if area < min_area_ratio:
+    # For each cell: compute mask, dominant color, radial, and accumulate using in-place ops
+    for i in range(k):
+        mask_bool = (idx == i)
+        if not mask_bool.any():
             continue
-
-        if blur_mask:
-            mask = cv2.GaussianBlur(mask, (3, 3), 0)
-
-        res = (img_f * mask[:, :, None] + gray_f * (1.0 - mask[:, :, None])).astype(np.uint8)
-
-        results.append((area, res, center))
-
-    if not results:
-        return [gray_3ch] if return_multiple and not video_mode else (gray_3ch)
-
-    # сортируем по площади (убывание)
-    results.sort(key=lambda x: x[0], reverse=True)
-
-    # Для фото — потенциально сохранить **все** варианты (или ограничить max_variants если передан)
-    if not video_mode:
-        # Если max_variants задан для фото — уважать его
-        if max_variants is not None:
-            results = results[:max_variants]
-        # Сохранение debug-артов при желании
-        if save_debug and out_dir and base_name:
-            for _, res, center in results:
-                hex_c = _lab_color_to_hex(center)
-                out_path = os.path.join(out_dir, f"{base_name}_filter_{hex_c}.png")
-                cv2.imwrite(out_path, res)
-        # Возвращаем список изображений (варианты)
-        imgs = [res for _, res, _ in results]
-        return imgs if return_multiple or len(imgs) > 1 else imgs
-
-    # --- Видео: вернуть один лучший или список до max_variants
-    if video_mode:
-        if return_multiple:
-            imgs = [res for _, res, _ in results]
-            # гарантируем длину <= max_variants (если был задан)
-            if max_variants is not None:
-                imgs = imgs[:max_variants]
-            # опционально сохраняем дебаг-кадры (редко для видео)
-            if save_debug and out_dir and base_name:
-                for idx, res in enumerate(imgs):
-                    center = results[idx][2]
-                    hex_c = _lab_color_to_hex(center)
-                    out_path = os.path.join(out_dir, f"{base_name}_filter_{hex_c}.png")
-                    cv2.imwrite(out_path, res)
-            return imgs
+        # minimal area check
+        if mask_bool.sum() < 4:
+            continue
+        # mask blurred for soft edge
+        if cell_edge_blur > 0:
+            # convert to float32 then blur
+            mask_f = cv2.GaussianBlur(mask_bool.astype(np.float32), (cell_edge_blur*2+1, cell_edge_blur*2+1), 0)
         else:
-            # возвращаем лучший вариант (первый в списке)
-            best_res = results[0][1]
-            # при save_debug можем сохранять один кадр для контроля
-            if save_debug and out_dir and base_name:
-                center = results[0][2]
-                hex_c = _lab_color_to_hex(center)
-                out_path = os.path.join(out_dir, f"{base_name}_filter_{hex_c}.png")
-                cv2.imwrite(out_path, best_res)
-            return best_res
+            mask_f = mask_bool.astype(np.float32)
 
+        sx = int(round(pts[i,0])); sy = int(round(pts[i,1]))
+        sx = max(0, min(ws-1, sx)); sy = max(0, min(hs-1, sy))
 
-# ----------------------------
-# НЕМНОГО ПРИМЕЧАНИЙ:
-# - Для видео: вызови reset_state() перед началом обработки (process_video может сделать это).
-# - Если process_video всё ещё вызывает эффект как fn(img,w,h,out_dir,base_name),
-#   то видео будет распознано по base_name ('frame_123') автоматически.
-# - Если хочешь получить до 5 видео-версий, в process_video нужно:
-#     * на инициализации вызвать reset_state()
-#     * при каждом кадре вызывать apply_filter(..., video_mode=True, return_multiple=True, max_variants=5)
-#     * и писать каждый список-элемент в свой VideoWriter (или создавать writers динамически)
-# - Для фото: вызов apply_filter(img, ...) вернёт список вариантов (по всем центрам) — их можно сохранить/показать.
-# ----------------------------
+        # dominant color (median per channel) — operate on original uint8 channels
+        dom = []
+        for ch in bch:
+            vals = ch[mask_bool]
+            if vals.size == 0:
+                # fallback to channel median
+                dom.append(float(np.median(ch)))
+            else:
+                dom.append(float(np.median(vals)))
+        dom = np.array(dom, dtype=np.float32)  # B,G,R
+
+        # radial vignette (float32)
+        dx = xs - float(sx)
+        dy = ys - float(sy)
+        r = np.sqrt(dx*dx + dy*dy)
+        rmax = max(1.0, math.sqrt((ws**2 + hs**2)) * 0.035)
+        radial = np.exp(- (r / (rmax*(1.0 + radial_strength)))**2).astype(np.float32)
+
+        # factor per-pixel for this cell (scalar mask_f * radial * radial_strength)
+        factor = mask_f * radial * float(radial_strength)  # (hs,ws) float32
+
+        # add color contribution in-place: result_small += factor[:,:,None] * dom[None,None,:]
+        # prepare small 3-channel factor broadcasted without allocating huge temp:
+        # we'll compute per-channel in a small loop to reduce temporaries
+        for c in range(3):
+            # result_small[:,:,c] += factor * dom[c]
+            np.add(result_small[:,:,c], factor * dom[c], out=result_small[:,:,c])
+
+        # reduce original contribution inside this mask (in-place)
+        # alpha = mask_f[:,:,None] * (1.0 - color_smooth)
+        alpha = (mask_f * (1.0 - color_smooth)).astype(np.float32)  # (hs,ws)
+        # multiply blended_small by (1 - alpha) per channel, in-place
+        one_minus_alpha = (1.0 - alpha)
+        for c in range(3):
+            np.multiply(blended_small[:,:,c], one_minus_alpha, out=blended_small[:,:,c])
+
+    # compose
+    composed = blended_small + result_small
+    # clip and to uint8
+    composed = np.clip(composed, 0, 255).astype(np.uint8)
+
+    # local shifts / remap using noise
+    shift_map_x = (noise * shift_amount).astype(np.float32)
+    shift_map_y = (cv2.GaussianBlur(noise, (0,0), max(0.5, ws*0.01)) * shift_amount * 0.6).astype(np.float32)
+    xs_f, ys_f = np.meshgrid(np.arange(ws, dtype=np.float32), np.arange(hs, dtype=np.float32))
+    map_x = (xs_f + shift_map_x).astype(np.float32)
+    map_y = (ys_f + shift_map_y).astype(np.float32)
+    remapped = cv2.remap(composed, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+    # paper texture
+    paper = (rng.normal(loc=0.0, scale=max(0.0001, paper_noise), size=remapped.shape).astype(np.float32))
+    paper = cv2.GaussianBlur(paper, (0,0), max(0.5, ws*0.005))
+    textured = np.clip(remapped.astype(np.float32) + paper, 0, 255).astype(np.uint8)
+
+    # upscale
+    if ds != 1:
+        final = cv2.resize(textured, (iw, ih), interpolation=cv2.INTER_LINEAR)
+    else:
+        final = textured
+
+    # final color tweak (CLAHE)
+    lab = cv2.cvtColor(final, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8,8))
+    l = clahe.apply(np.clip(l,0,255).astype(np.uint8)).astype(np.float32)
+    lab = cv2.merge([l, a, b]).astype(np.uint8)
+    final = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    if save_debug and out_dir and base_name:
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(out_dir, f"{base_name}_mode29_orgmosaic.png"), final)
+        except Exception:
+            pass
+
+    return final
