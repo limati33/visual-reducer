@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 import colorsys
 import math
+from pathlib import Path
 
 # --- конфигурация "базовых" RISO оттенков (h в 0..1) ---
 BASE_INK_HUES = [
@@ -22,7 +23,6 @@ def _hue_distance(a, b):
 
 def _rgb_to_hsv_array(rgb_unit):
     """rgb_unit: Nx3 float in 0..1 -> returns Nx3 hsv (h 0..1, s 0..1, v 0..1)"""
-    # vectorized via colorsys in loop (palette sizes small)
     out = np.zeros_like(rgb_unit)
     for i, (r, g, b) in enumerate(rgb_unit):
         out[i] = colorsys.rgb_to_hsv(float(r), float(g), float(b))
@@ -46,16 +46,13 @@ def _make_bayer8_threshold_map():
         [10,58,6,54,9,57,5,53],
         [42,26,38,22,41,25,37,21]
     ], dtype=np.float32)
-    # normalize to 0..255
     return ((b + 0.5) / 64.0 * 255.0).astype(np.uint8)
 
 BAYER8 = _make_bayer8_threshold_map()
 
 def _tile_threshold_map(shape, bayer=BAYER8, scale=1.0):
-    """Tile bayer map to the desired image shape and optionally scale (0..1) brightness threshold"""
     h, w = shape
     by, bx = bayer.shape
-    # tile
     reps_y = math.ceil(h / by)
     reps_x = math.ceil(w / bx)
     tiled = np.tile(bayer, (reps_y, reps_x))
@@ -64,28 +61,42 @@ def _tile_threshold_map(shape, bayer=BAYER8, scale=1.0):
         tiled = np.clip(tiled * scale, 0, 255)
     return tiled.astype(np.uint8)
 
+# ------------------------------------------
+# Палитры: две версии — со сдвигом и без сдвига
+# ------------------------------------------
+
 def make_alternate_palette_caesar(centers_rgb, n_colors, ink_hues=None, ink_dark_threshold=0.18):
     """
-    Построить альтернативную палитру в стиле "Цезаря":
-    - centers_rgb: Nx3 uint8
-    - n_colors: количество цветов (int) -> определяет сдвиг offset = n_colors % len(ink_hues)
-    - ink_hues: optional list базовых оттенков
-    Возвращает Nx3 uint8.
+    Версия 'со сдвигом' (Цезарь). Гарантированно применяет ненулевой сдвиг:
+      offset = int(n_colors) % L, но если результат 0 — используем offset=1.
+    Это обеспечивает изменение палитры при любых n_colors.
+    centers_rgb: Nx3 uint8
+    n_colors: int (может быть None) — если None, offset будет = 1 (гарантированный сдвиг)
+    ink_hues: optional list базовых оттенков
     """
     if ink_hues is None:
         ink_hues = BASE_INK_HUES
     L = len(ink_hues)
-    offset = int(n_colors) % L if n_colors is not None else 0
+
+    # вычисляем offset; гарантируем ненулевой сдвиг
+    if n_colors is None:
+        offset = 1
+    else:
+        try:
+            offset = int(n_colors) % L
+        except Exception:
+            offset = 1
+        if offset == 0:
+            offset = 1
 
     centers = np.asarray(centers_rgb, dtype=np.float32) / 255.0
-    hsv = _rgb_to_hsv_array(centers)  # Nx3
+    hsv = _rgb_to_hsv_array(centers)
     h = hsv[:, 0].copy()
     s = hsv[:, 1].copy()
     v = hsv[:, 2].copy()
 
     new_h = np.zeros_like(h)
     for i, orig_h in enumerate(h):
-        # найти ближайший ink_hues индекс
         best_idx = 0
         best_dist = 10.0
         for j, ih in enumerate(ink_hues):
@@ -96,7 +107,6 @@ def make_alternate_palette_caesar(centers_rgb, n_colors, ink_hues=None, ink_dark
         target_idx = (best_idx + offset) % L
         new_h[i] = ink_hues[target_idx]
 
-    # для тёмных — понижаем насыщенность/яркость, чтобы не получить "цветной" черный
     dark_mask = v <= ink_dark_threshold
     new_s = np.clip(s * 1.15 + 0.03, 0.02, 0.98)
     new_v = np.clip(v * 0.9 + 0.02, 0.02, 0.98)
@@ -108,31 +118,66 @@ def make_alternate_palette_caesar(centers_rgb, n_colors, ink_hues=None, ink_dark
     new_rgb = _hsv_to_rgb_array(new_hsv)
     return np.clip((new_rgb * 255.0).round(), 0, 255).astype(np.uint8)
 
-def apply_risograph(img, w, h, out_dir, base_name, **kwargs):
+def make_alternate_palette_no_shift(centers_rgb, ink_hues=None, ink_dark_threshold=0.18):
+    """
+    Версия 'без сдвига' — сопоставляет каждый центр ближайшему базовому ink_hue,
+    но НЕ сдвигает индекс. Используется, когда нужен классический (без Цезаря) маппинг.
+    centers_rgb: Nx3 uint8
+    """
+    if ink_hues is None:
+        ink_hues = BASE_INK_HUES
+
+    centers = np.asarray(centers_rgb, dtype=np.float32) / 255.0
+    hsv = _rgb_to_hsv_array(centers)
+    h = hsv[:, 0].copy()
+    s = hsv[:, 1].copy()
+    v = hsv[:, 2].copy()
+
+    new_h = np.zeros_like(h)
+    for i, orig_h in enumerate(h):
+        best_idx = 0
+        best_dist = 10.0
+        for j, ih in enumerate(ink_hues):
+            d = _hue_distance(orig_h, ih)
+            if d < best_dist:
+                best_dist = d
+                best_idx = j
+        new_h[i] = ink_hues[best_idx]
+
+    dark_mask = v <= ink_dark_threshold
+    new_s = np.clip(s * 1.15 + 0.03, 0.02, 0.98)
+    new_v = np.clip(v * 0.9 + 0.02, 0.02, 0.98)
+    new_hsv = np.stack([new_h, new_s, new_v], axis=1)
+    if np.any(dark_mask):
+        new_hsv[dark_mask, 1] = np.clip(new_hsv[dark_mask, 1] * 0.2, 0.0, 0.25)
+        new_hsv[dark_mask, 2] = np.clip(new_hsv[dark_mask, 2] * 0.6, 0.02, 0.25)
+
+    new_rgb = _hsv_to_rgb_array(new_hsv)
+    return np.clip((new_rgb * 255.0).round(), 0, 255).astype(np.uint8)
+
+# ------------------------------------------
+# Главная функция — apply_risograph поддерживает выбор режима палитры
+# ------------------------------------------
+
+def apply_risograph(img, w, h, out_dir=None, base_name=None, **kwargs):
     """
     Риcо-эффект.
-    Поддерживаемые kwargs:
-      - n_colors: int или None (если None — определяем по уникальным цветам)
-      - dot_scale: float (0.5..1.5) — масштаб порога Bayer (меняет плотность точек)
-      - max_shift: int — макс. пикселей для смещения misregistration
-      - ink_hues: optional list базовых ink оттенков
-    Возвращает RGB uint8 image.
+    Возвращает RGB uint8 image (с сдвигом).
+    Также можно сохранять вариант без сдвига отдельно.
     """
-    # параметры
+    palette_mode = kwargs.get('palette_mode', 'shift')  # 'shift' или 'no_shift'
     n_colors_kw = kwargs.get('n_colors', None)
     dot_scale = float(kwargs.get('dot_scale', 1.0))
     max_shift = int(kwargs.get('max_shift', 3))
     ink_hues = kwargs.get('ink_hues', None)
 
-    # Преобразования
     img = np.asarray(img, dtype=np.uint8)
     H, W = img.shape[:2]
 
-    # получаем уникальные цвета и обратные индексы
     flat = img.reshape(-1, 3)
     unique_colors, inverse = np.unique(flat, axis=0, return_inverse=True)
     num_unique = unique_colors.shape[0]
-    # определяем n_colors (источник правды)
+
     if n_colors_kw is None:
         n_colors = num_unique
     else:
@@ -141,69 +186,68 @@ def apply_risograph(img, w, h, out_dir, base_name, **kwargs):
         except Exception:
             n_colors = num_unique
 
-    # если слишком много уникальных цветов — оставляем первые n_colors (защита)
     if num_unique > n_colors:
-        # в нормальных условиях unique_colors coming from quantized image => num_unique == n_colors
         unique_colors = unique_colors[:n_colors]
-        # нужно пересчитать inverse: найдем ближайший цвет из unique_colors для каждого пикселя
-        # (возможно тяжеловато, но редкий случай)
-        # рассчитываем евклид. расстояние между flat и unique_colors
         d = np.linalg.norm(flat[:, None, :].astype(np.int16) - unique_colors[None, ...].astype(np.int16), axis=2)
         inverse = np.argmin(d, axis=1)
         num_unique = unique_colors.shape[0]
 
-    # 1) строим альтернативную палитру (Caesar)
-    alt_palette = make_alternate_palette_caesar(unique_colors, n_colors, ink_hues=ink_hues)
+    # --- палитра со сдвигом ---
+    alt_palette_shift = make_alternate_palette_caesar(unique_colors, n_colors, ink_hues=ink_hues)
 
-    # 2) подготовим карту порогов (Bayer), можно масштабировать dot_scale
+    # --- палитра без сдвига ---
+    alt_palette_no_shift = make_alternate_palette_no_shift(unique_colors, ink_hues=ink_hues)
+
+    # Bayer threshold
     th_map = _tile_threshold_map((H, W), BAYER8, scale=dot_scale)
-
-    # 3) Получим Value (яркость) из HSV quantized img — используем его как "интенсивность" для каждой позиции
-    #    Конвертация: RGB->HSV через cv2: H:0-179, S:0-255, V:0-255
     hsv_cv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     V_map = hsv_cv[:, :, 2].astype(np.uint8)
-
-    # 4) Собираем итоговое изображение по слоям (dot screens)
-    out = np.zeros((H, W, 3), dtype=np.float32)
-
     inverse_2d = inverse.reshape(H, W)
 
-    # для вариативности misregistration используем циклические смещения, зависящие от индекса
-    for i in range(num_unique):
-        # интенсивность этого слоя: значение яркости там, где пиксели принадлежат этой кластерной метке
-        mask_base = (inverse_2d == i)
-        if not np.any(mask_base):
-            continue  # нет пикселей этого кластера
+    def render(alt_palette):
+        out = np.zeros((H, W, 3), dtype=np.float32)
+        for i in range(num_unique):
+            mask_base = (inverse_2d == i)
+            if not np.any(mask_base):
+                continue
 
-        # intensity map (0..255) — берём V_map там, где mask, иначе 0
-        intensity = (V_map * mask_base).astype(np.uint8)
+            intensity = (V_map * mask_base).astype(np.uint8)
+            dot_mask = (intensity > th_map).astype(np.uint8)
 
-        # ordered dither: dot mask = intensity > threshold_map
-        # но чтобы точки не появлялись исключительно как бинар на границе, можно немного смягчить
-        dot_mask = (intensity > th_map).astype(np.uint8)  # 0/1
+            dx = ((i * 3) % (2 * max_shift + 1)) - max_shift
+            dy = ((i * 5) % (2 * max_shift + 1)) - max_shift
+            if dx != 0 or dy != 0:
+                dot_mask = np.roll(dot_mask, shift=dx, axis=1)
+                dot_mask = np.roll(dot_mask, shift=dy, axis=0)
 
-        # смещение слоя (misregistration): небольшое циклическое смещение по (dx,dy)
-        # разумно сделать зависимость от i, чтобы разные цвета смещались по-разному
-        dx = ((i * 3) % (2 * max_shift + 1)) - max_shift
-        dy = ((i * 5) % (2 * max_shift + 1)) - max_shift
-        if dx != 0 or dy != 0:
-            dot_mask = np.roll(dot_mask, shift=dx, axis=1)
-            dot_mask = np.roll(dot_mask, shift=dy, axis=0)
+            color = alt_palette[i].astype(np.float32) / 255.0
+            for c in range(3):
+                out[:, :, c] += dot_mask.astype(np.float32) * (color[c] * 255.0)
 
-        # слой цвета
-        color = alt_palette[i].astype(np.float32) / 255.0  # 0..1
-        # добавляем в итог (аддитивное смешение, как при печати ризо)
-        # масштабируем dot_mask (0/1) на color*255
-        for c in range(3):
-            out[:, :, c] += dot_mask.astype(np.float32) * (color[c] * 255.0)
+        out = np.clip(out, 0, 255).astype(np.uint8)
 
-    # после наложения точек — возможные артефакты яркости >255. Clip
-    out = np.clip(out, 0, 255).astype(np.uint8)
+        paper_noise = kwargs.get('paper_noise', 0.03)
+        if paper_noise and paper_noise > 0.0:
+            noise = (np.random.default_rng(123).normal(loc=0.0, scale=paper_noise * 255.0, size=out.shape)).astype(np.int16)
+            out = np.clip(out.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        return out
 
-    # Optional: немного текстуры/шума, чтобы имитировать бумагу (тонкий шум)
-    paper_noise = kwargs.get('paper_noise', 0.03)  # 0..0.2
-    if paper_noise and paper_noise > 0.0:
-        noise = (np.random.default_rng(123).normal(loc=0.0, scale=paper_noise * 255.0, size=out.shape)).astype(np.int16)
-        out = np.clip(out.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    # --- основной результат (со сдвигом) ---
+    out_shift = render(alt_palette_shift)
 
-    return out
+    # --- вариант без сдвига ---
+    out_no_shift = render(alt_palette_no_shift)
+
+    # --- сохранение, если out_dir указан ---
+    if out_dir:
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        name_stem = Path(base_name).stem if base_name else "risograph_result"
+
+        # сохраняем основной (со сдвигом)
+        cv2.imwrite(str(Path(out_dir) / f"{name_stem}.png"), cv2.cvtColor(out_shift, cv2.COLOR_RGB2BGR))
+
+        # сохраняем вариант без сдвига с приставкой
+        cv2.imwrite(str(Path(out_dir) / f"{name_stem}_no_shift.png"), cv2.cvtColor(out_no_shift, cv2.COLOR_RGB2BGR))
+
+    # возвращаем основной результат
+    return out_shift
