@@ -27,13 +27,13 @@ from .mode_25_stainedglass import apply_stainedglass
 from .mode_26_film import apply_film
 from .mode_27_printer import apply_printer
 from .mode_28_shadowhatch import apply_shadowhatch
-from .mode_29_filter import apply_filter
+from .mode_29_voronoimosaic import apply_voronoimosaic
 from .mode_30_neon import apply_neon
 from .mode_31_drift import apply_drift
 from .mode_32_underwater import apply_underwater
 from .mode_33_gradient import apply_gradient
 from .mode_34_colorize import apply_colorize
-from .mode_35_typographic import apply_typographic
+from .mode_35_risograph import apply_risograph
 
 EFFECTS = {
     1: apply_poster,
@@ -64,13 +64,13 @@ EFFECTS = {
     26: apply_film,
     27: apply_printer,
     28: apply_shadowhatch,
-    29: apply_filter,
+    29: apply_voronoimosaic,
     30: apply_neon,
     31: apply_drift,
     32: apply_underwater,
     33: apply_gradient,
     34: apply_colorize,
-    35: apply_typographic
+    35: apply_risograph
 }
 
 

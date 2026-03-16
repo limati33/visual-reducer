@@ -3,7 +3,7 @@ import math
 import cv2
 import numpy as np
 
-def apply_filter(
+def apply_voronoimosaic(
     img,
     w=None, h=None,
     out_dir=None, base_name=None,
