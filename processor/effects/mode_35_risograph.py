@@ -242,10 +242,6 @@ def apply_risograph(img, w, h, out_dir=None, base_name=None, **kwargs):
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         name_stem = Path(base_name).stem if base_name else "risograph_result"
-
-        # сохраняем основной (со сдвигом)
-        cv2.imwrite(str(Path(out_dir) / f"{name_stem}.png"), cv2.cvtColor(out_shift, cv2.COLOR_RGB2BGR))
-
         # сохраняем вариант без сдвига с приставкой
         cv2.imwrite(str(Path(out_dir) / f"{name_stem}_no_shift.png"), cv2.cvtColor(out_no_shift, cv2.COLOR_RGB2BGR))
 
