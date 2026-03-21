@@ -1,157 +1,91 @@
 # processor/effects/mode_17_mosaic.py
 import cv2
 import numpy as np
-import math
 import random
-
-
-def rotate_pts(pts, angle, cx, cy):
-    ca = math.cos(angle)
-    sa = math.sin(angle)
-    out = []
-    for (x, y) in pts:
-        rx = x - cx
-        ry = y - cy
-        nx = rx * ca - ry * sa + cx
-        ny = rx * sa + ry * ca + cy
-        out.append((int(round(nx)), int(round(ny))))
-    return out
-
+import math
 
 def apply_mosaic(img, w, h, out_dir, base_name):
+    # Если переданы размеры, масштабируем
+    if w and h:
+        img = cv2.resize(img, (int(w), int(h)), interpolation=cv2.INTER_AREA)
+
     hq, wq = img.shape[:2]
+    
+    # Размер ячейки. Можно сделать параметром, сейчас жестко 8
+    base = 8 
+    
+    # Фон мозаики (затирка между плитками). Сделаем темно-серой.
+    abstract = np.full_like(img, (30, 30, 30))
 
-    desired_cell = 8
-    base = max(1, desired_cell)
+    shapes = ["circle", "square", "triangle", "diamond"]
 
-    cols = int(np.ceil(wq / base))
-    rows = int(np.ceil(hq / base))
-
-    abstract = np.zeros_like(img)
-
-    shapes = ["circle", "square", "triangle", "diamond", "pentagon"]
-    grid_color = (50, 50, 50)
-
-    # сетка
-    for r in range(rows + 1):
-        y = min(hq - 1, r * base)
-        cv2.line(abstract, (0, y), (wq - 1, y), grid_color, 1)
-
-    for c in range(cols + 1):
-        x = min(wq - 1, c * base)
-        cv2.line(abstract, (x, 0), (x, hq - 1), grid_color, 1)
-
-    # мозаика
-    for ry in range(rows):
-        for cx in range(cols):
-            x0 = cx * base
-            y0 = ry * base
-            x1 = min(wq, (cx + 1) * base)
-            y1 = min(hq, (ry + 1) * base)
-
-            bw = x1 - x0
-            bh = y1 - y0
-            if bw <= 0 or bh <= 0:
+    # Проходим по сетке
+    for y in range(0, hq, base):
+        for x in range(0, wq, base):
+            
+            # Границы блока
+            x1 = min(wq, x + base)
+            y1 = min(hq, y + base)
+            
+            # Защита от нулевых блоков на краях
+            if x1 - x <= 0 or y1 - y <= 0:
                 continue
 
-            block = img[y0:y1, x0:x1]
+            block = img[y:y1, x:x1]
+            
+            # Берем средний цвет блока
+            b_mean, g_mean, r_mean = block.mean(axis=(0, 1))
+            
+            # ДОБАВЛЯЕМ ВИТРАЖНЫЙ ЭФФЕКТ (Легкая случайная вариация яркости)
+            # Это заменило сломанный блок if lum > 130
+            brightness_shift = random.randint(-15, 15)
+            b = np.clip(b_mean + brightness_shift, 0, 255)
+            g = np.clip(g_mean + brightness_shift, 0, 255)
+            r = np.clip(r_mean + brightness_shift, 0, 255)
+            
+            shape_col = (int(b), int(g), int(r))
 
-            # средний цвет (BGR!)
-            mean_col = tuple(map(int, block.mean(axis=(0, 1))))
-
-            # корректная яркость для BGR
-            b, g, r = mean_col
-            lum = 0.299 * r + 0.587 * g + 0.114 * b
-
-            delta = int(max(20, min(80, 128 - abs(lum - 128))))
-
-            if lum > 130:
-                shape_col = (
-                    max(0, b - delta),
-                    max(0, g - delta),
-                    max(0, r - delta),
-                )
-            else:
-                shape_col = (
-                    min(255, b + delta),
-                    min(255, g + delta),
-                    min(255, r + delta),
-                )
-
+            # Параметры фигуры
             shape = random.choice(shapes)
-
-            cx_px = x0 + bw // 2
-            cy_px = y0 + bh // 2
-            scale = random.uniform(1.0, 1.25)
-
+            cx_px = x + (x1 - x) // 2
+            cy_px = y + (y1 - y) // 2
+            
+            # Немного уменьшаем размер, чтобы было видно фон (затирку)
+            scale = random.uniform(0.6, 0.9)
+            hw = int((base / 2) * scale)
+            
+            # Рисуем фигуру
             if shape == "circle":
-                rx = int((bw / 2) * scale)
-                ry_ = int((bh / 2) * scale)
-                cv2.ellipse(
-                    abstract,
-                    (cx_px, cy_px),
-                    (max(1, rx), max(1, ry_)),
-                    0,
-                    0,
-                    360,
-                    shape_col,
-                    -1,
-                )
-            else:
-                hw = (bw / 2) * scale
-                hh = (bh / 2) * scale
-
-                if shape == "square":
-                    pts = [
-                        (cx_px - hw, cy_px - hh),
-                        (cx_px + hw, cy_px - hh),
-                        (cx_px + hw, cy_px + hh),
-                        (cx_px - hw, cy_px + hh),
-                    ]
-                elif shape == "diamond":
-                    pts = [
-                        (cx_px, cy_px - hh),
-                        (cx_px + hw, cy_px),
-                        (cx_px, cy_px + hh),
-                        (cx_px - hw, cy_px),
-                    ]
-                elif shape == "triangle":
-                    pts = [
-                        (cx_px, cy_px - hh),
-                        (cx_px - hw, cy_px + hh),
-                        (cx_px + hw, cy_px + hh),
-                    ]
-                elif shape == "pentagon":
-                    pts = []
-                    sides = 5
-                    for i in range(sides):
-                        ang = 2 * math.pi * i / sides - math.pi / 2
-                        px = cx_px + math.cos(ang) * hw
-                        py = cy_px + math.sin(ang) * hh
-                        pts.append((px, py))
+                cv2.circle(abstract, (cx_px, cy_px), hw, shape_col, -1)
+            
+            elif shape == "square":
+                pt1 = (cx_px - hw, cy_px - hw)
+                pt2 = (cx_px + hw, cy_px + hw)
+                cv2.rectangle(abstract, pt1, pt2, shape_col, -1)
+                
+            elif shape == "diamond":
+                pts = np.array([
+                    [cx_px, cy_px - hw],
+                    [cx_px + hw, cy_px],
+                    [cx_px, cy_px + hw],
+                    [cx_px - hw, cy_px]
+                ], np.int32)
+                cv2.fillConvexPoly(abstract, pts, shape_col)
+                
+            elif shape == "triangle":
+                # Рандомное направление треугольника
+                if random.choice([True, False]):
+                    pts = np.array([
+                        [cx_px, cy_px - hw], [cx_px - hw, cy_px + hw], [cx_px + hw, cy_px + hw]
+                    ], np.int32)
                 else:
-                    pts = [
-                        (cx_px - hw, cy_px - hh),
-                        (cx_px + hw, cy_px - hh),
-                        (cx_px + hw, cy_px + hh),
-                        (cx_px - hw, cy_px + hh),
-                    ]
+                    pts = np.array([
+                        [cx_px, cy_px + hw], [cx_px - hw, cy_px - hw], [cx_px + hw, cy_px - hw]
+                    ], np.int32)
+                cv2.fillConvexPoly(abstract, pts, shape_col)
 
-                angle = random.uniform(-0.35, 0.35)
-                pts_rot = rotate_pts(pts, angle, cx_px, cy_px)
-                poly = np.array(pts_rot, dtype=np.int32)
+    # Лёгкий шум для фактуры камня
+    noise = np.random.normal(0, 5, abstract.shape).astype(np.int16)
+    result = np.clip(abstract.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
-                if abs(cv2.contourArea(poly)) < 4:
-                    r = max(1, int(min(bw, bh) * 0.25))
-                    cv2.circle(abstract, (cx_px, cy_px), r, shape_col, -1)
-                else:
-                    cv2.fillConvexPoly(abstract, poly, shape_col)
-
-    # лёгкий шум
-    if max(hq, wq) > 200:
-        noise = (np.random.randn(hq, wq, 1) * 6).astype(np.int16)
-        abstract = np.clip(
-            abstract.astype(np.int16) + noise, 0, 255
-        ).astype(np.uint8)
-
-    return abstract
+    return result

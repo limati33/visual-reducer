@@ -1,11 +1,8 @@
 # processor/effects/mode_13_hologram.py
 import cv2
 import numpy as np
-from utils.input_utils import print_progress
-from utils.logging_utils import CYAN, RESET, log_error
 
-def apply_hologram(img, w, h, out_dir, base_name, image_path=None, n_colors=None, blur_strength=None, mode=None):
-    print_progress(3, prefix=f"{CYAN}Анаглиф 3D (Красный-Циан)...{RESET} ")
+def apply_hologram(img, w, h, out_dir, base_name, image_path, n_colors, blur_strength, mode):
     try:
         # NOTE: Оригинальные шаги 1, 9, 10 и 11, добавляющие шум, свечение и радужный градиент, 
         # удалены, так как они мешают чистому 3D-восприятию. Мы используем исходный img.
