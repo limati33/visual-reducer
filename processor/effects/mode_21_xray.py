@@ -112,10 +112,4 @@ def apply_xray(img, w=None, h=None, out_dir=None, base_name=None):
     xray = ((xray / 255.0) ** gamma) * 255.0
     xray = np.clip(xray, 0, 255).astype(np.uint8)
 
-    # сохранение (опционально)
-    if out_dir:
-        Path(out_dir).mkdir(parents=True, exist_ok=True)
-        name_stem = Path(base_name).stem if base_name else "xray_result"
-        cv2.imwrite(str(Path(out_dir) / f"xray_{name_stem}.png"), xray)
-
-    return xray
+    return cv2.cvtColor(xray, cv2.COLOR_BGR2RGB)
