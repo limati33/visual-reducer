@@ -34,6 +34,7 @@ from .mode_32_underwater import apply_underwater
 from .mode_33_gradient import apply_gradient
 from .mode_34_colorize import apply_colorize
 from .mode_35_risograph import apply_risograph
+from .mode_36_coloredge import apply_coloredge
 
 EFFECTS = {
     1: apply_poster,
@@ -70,7 +71,8 @@ EFFECTS = {
     32: apply_underwater,
     33: apply_gradient,
     34: apply_colorize,
-    35: apply_risograph
+    35: apply_risograph,
+    36: apply_coloredge
 }
 
 

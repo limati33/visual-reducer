@@ -4,9 +4,6 @@ import numpy as np
 from pathlib import Path
 
 def apply_xray(img, w=None, h=None, out_dir=None, base_name=None):
-    if img is None:
-        raise ValueError("apply_xray: img is None")
-
     # масштабирование (если заданы)
     if w and h:
         try:
