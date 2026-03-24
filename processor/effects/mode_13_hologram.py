@@ -2,11 +2,8 @@
 import cv2
 import numpy as np
 
-def apply_hologram(img, w, h, out_dir, base_name, image_path, n_colors, blur_strength, mode):
+def apply_hologram(img, w, h, out_dir, base_name, *args, **kwargs):
     try:
-        # NOTE: Оригинальные шаги 1, 9, 10 и 11, добавляющие шум, свечение и радужный градиент, 
-        # удалены, так как они мешают чистому 3D-восприятию. Мы используем исходный img.
-
         # 1. Используем исходное изображение как базовый кадр
         base_frame = img.copy() # Копируем для чистоты
         

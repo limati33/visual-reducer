@@ -111,11 +111,4 @@ def apply_gradient(img, w=None, h=None, out_dir=None, base_name=None):
 
     result = cv2.medianBlur(result, 3)
 
-    if out_dir and base_name:
-        os.makedirs(out_dir, exist_ok=True)
-        cv2.imwrite(
-            os.path.join(out_dir, f"{base_name}_mode33_gradient.png"),
-            result
-        )
-
     return result

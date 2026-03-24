@@ -18,8 +18,6 @@ def apply_voronoimosaic(
     return_multiple=False,
     save_debug=False
 ):
-    if img is None:
-        return None
 
     ih0, iw0 = img.shape[:2]
     if w and h and (iw0 != w or ih0 != h):

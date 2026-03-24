@@ -142,11 +142,7 @@ def apply_graph(img, w, h, out_dir, base_name):
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         name_stem = Path(base_name).stem if base_name else "graph"
-
-        png_path = Path(out_dir) / f"graph_{name_stem}.png"
         txt_path = Path(out_dir) / f"graph_{name_stem}.txt"
-
-        cv2.imwrite(str(png_path), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
 
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"Source: {base_name}\n")
