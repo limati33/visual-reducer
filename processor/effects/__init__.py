@@ -36,6 +36,7 @@ from .mode_34_colorize import apply_colorize
 from .mode_35_risograph import apply_risograph
 from .mode_36_coloredge import apply_coloredge
 from .mode_37_wireframe import apply_wireframe
+from .mode_38_bufferglitch import apply_bufferglitch
 
 EFFECTS = {
     1: apply_poster,
@@ -74,7 +75,8 @@ EFFECTS = {
     34: apply_colorize,
     35: apply_risograph,
     36: apply_coloredge,
-    37: apply_wireframe
+    37: apply_wireframe,
+    38: apply_bufferglitch
 }
 
 
