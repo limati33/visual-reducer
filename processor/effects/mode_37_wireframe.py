@@ -1,6 +1,7 @@
 # processor/effects/mode_37_wireframe.py
 import cv2
 import numpy as np
+import math
 from pathlib import Path
 
 try:
@@ -36,13 +37,7 @@ def _shift_channel(channel, dx, dy):
     )
 
 
-def _apply_camera_transform(img, zoom=1.0, dx=0, dy=0, angle=0.0):
-    """
-    Лёгкая имитация камеры:
-    - zoom > 1.0 приближает картинку
-    - dx / dy дают микросмещение
-    - angle добавляет небольшой поворот
-    """
+def _apply_camera_transform(img, zoom=1.0, dx=0.0, dy=0.0, angle=0.0):
     h, w = img.shape[:2]
     cx, cy = w / 2.0, h / 2.0
 
@@ -93,30 +88,37 @@ def _posterize_kmeans(img, k=6, seed=42):
     return quantized
 
 
-def _save_gif_from_frames(frames_bgr, gif_path, fps=8):
-    if not _HAVE_PIL or not frames_bgr:
+def _save_gif_from_frames(frames, gif_path, fps=12, input_is_bgr=True):
+    if not _HAVE_PIL or not frames:
         return False
 
     pil_frames = []
-    for fr in frames_bgr:
+    for fr in frames:
         if fr is None:
             continue
+
         if fr.dtype != np.uint8:
             fr = np.clip(fr, 0, 255).astype(np.uint8)
-        rgb = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
-        pil_frames.append(Image.fromarray(rgb))
+
+        if input_is_bgr:
+            fr = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+
+        pil_img = Image.fromarray(fr).convert("P", palette=Image.ADAPTIVE, colors=256)
+        pil_frames.append(pil_img)
 
     if len(pil_frames) < 2:
         return False
 
-    duration_ms = max(20, int(1000 / max(1, fps)))
+    duration_ms = max(10, int(1000 / max(1, fps)))
+
     pil_frames[0].save(
         str(gif_path),
         save_all=True,
         append_images=pil_frames[1:],
         duration=duration_ms,
         loop=0,
-        optimize=False
+        optimize=False,
+        disposal=2
     )
     return True
 
@@ -144,7 +146,6 @@ def _build_wireframe_frame(
 
     rng = np.random.default_rng(seed)
 
-    # 1) база
     base = img.copy()
     smooth = cv2.bilateralFilter(base, d=11, sigmaColor=95, sigmaSpace=95)
     smooth = cv2.GaussianBlur(smooth, (0, 0), 0.8)
@@ -152,13 +153,11 @@ def _build_wireframe_frame(
     quantized = _posterize_kmeans(smooth, k=kmeans_k, seed=seed)
     result = cv2.addWeighted(quantized, base_alpha, base, 1.0 - base_alpha, 0)
 
-    # 2) лёгкое смещение каналов
     b, g, r = cv2.split(result)
     b = _shift_channel(b, -1, 0)
     r = _shift_channel(r, 1, 0)
     result = cv2.merge([b, g, r])
 
-    # 3) крупные цветовые области
     unique_colors = np.unique(quantized.reshape(-1, 3), axis=0)
     area_min = max(50, (iw * ih) // int(region_min_area_ratio))
 
@@ -210,7 +209,6 @@ def _build_wireframe_frame(
                 lineType=cv2.LINE_AA
             )
 
-    # 4) wireframe-линии
     gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (0, 0), 1.2)
     gray = cv2.bilateralFilter(gray, d=7, sigmaColor=65, sigmaSpace=65)
@@ -261,7 +259,6 @@ def _build_wireframe_frame(
             lineType=cv2.LINE_AA
         )
 
-    # 5) зерно и полутон
     h_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
 
     noise = rng.normal(0, 7, (ih, iw, 3)).astype(np.int16)
@@ -281,7 +278,6 @@ def _build_wireframe_frame(
 
     result = np.where(dot_mask[..., None] > 0, (result * 0.90).astype(np.uint8), result)
 
-    # 6) виньетка
     yy, xx = np.indices((ih, iw), dtype=np.float32)
     cx, cy = iw / 2.0, ih / 2.0
     dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
@@ -313,7 +309,6 @@ def apply_wireframe(
     make_gif=None,
     gif_frames=8,
 ):
-    # Авто-решение: фото -> GIF, видео -> без GIF
     if make_gif is None:
         make_gif = not _is_video_source(source_path)
 
@@ -335,36 +330,39 @@ def apply_wireframe(
 
     if make_gif and out_dir and base_name and not _is_video_source(source_path):
         frames = []
-        total = max(8, int(gif_frames))  # увеличиваем количество кадров для плавности
+        total = max(18, int(gif_frames) * 2)
 
         for i in range(total):
-            # Параметры плавного движения камеры
-            t = i / max(1, total - 1)
+            t = i / total
+            phase = 2.0 * math.pi * t
 
-            zoom = 1.0 + 0.035 * np.sin(t * np.pi)     # плавный zoom-in
-            dx = int(np.sin(t * 2 * np.pi) * 4)        # горизонтальная тряска
-            dy = int(np.cos(t * 2 * np.pi) * 3)        # вертикальная тряска
-            # угол не нужен, убираем
+            zoom = 1.0 + 0.012 * math.sin(phase + math.pi * 0.5)
+            dx = 0.8 * math.sin(phase * 0.5 + 1.1)
+            dy = 7.0 * math.sin(phase) + 2.0 * math.sin(phase * 2.0 + 0.7)
+            angle = 0.12 * math.sin(phase * 0.5 + 0.3)
 
-            # Применяем только сдвиг и зум к входной картинке
             camera_img = _apply_camera_transform(
                 img,
                 zoom=zoom,
                 dx=dx,
                 dy=dy,
-                angle=0.0
+                angle=angle
             )
 
-            # Каждый кадр пересчитывается заново: контуры и цвет реально меняются
+            edge1 = edge_thresh1 + 4.0 * math.sin(phase + 0.2)
+            edge2 = edge_thresh2 + 6.0 * math.sin(phase + 1.4)
+            line_len = max(10, int(round(min_line_length + 3.0 * math.sin(phase + 0.8))))
+            poly = max(0.002, poly_epsilon * (1.0 + 0.18 * math.sin(phase + 2.1)))
+
             frame = _build_wireframe_frame(
                 camera_img,
                 w=w,
                 h=h,
                 seed=seed + i * 17,
-                edge_thresh1=edge_thresh1 + ((i % 3) - 1) * 5,
-                edge_thresh2=edge_thresh2 + ((i % 4) - 2) * 6,
-                min_line_length=max(10, min_line_length + ((i % 3) - 1) * 3),
-                poly_epsilon=max(0.002, poly_epsilon + ((i % 4) - 2) * 0.0015),
+                edge_thresh1=int(round(edge1)),
+                edge_thresh2=int(round(edge2)),
+                min_line_length=line_len,
+                poly_epsilon=poly,
                 thickness=thickness,
                 kmeans_k=kmeans_k,
                 base_alpha=base_alpha,
@@ -375,6 +373,6 @@ def apply_wireframe(
             frames.append(frame)
 
         gif_path = Path(out_dir) / f"{Path(base_name).stem}_wireframe.gif"
-        _save_gif_from_frames(frames, gif_path, fps=24)  # увеличиваем FPS для плавности
+        _save_gif_from_frames(frames, gif_path, fps=18, input_is_bgr=True)
 
     return result
