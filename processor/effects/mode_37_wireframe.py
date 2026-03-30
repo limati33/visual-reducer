@@ -37,23 +37,6 @@ def _shift_channel(channel, dx, dy):
     )
 
 
-def _apply_camera_transform(img, zoom=1.0, dx=0.0, dy=0.0, angle=0.0):
-    h, w = img.shape[:2]
-    cx, cy = w / 2.0, h / 2.0
-
-    m = cv2.getRotationMatrix2D((cx, cy), float(angle), float(zoom))
-    m[0, 2] += float(dx)
-    m[1, 2] += float(dy)
-
-    return cv2.warpAffine(
-        img,
-        m,
-        (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT101
-    )
-
-
 def _posterize_kmeans(img, k=6, seed=42):
     ih, iw = img.shape[:2]
     work = img
@@ -88,20 +71,17 @@ def _posterize_kmeans(img, k=6, seed=42):
     return quantized
 
 
-def _save_gif_from_frames(frames, gif_path, fps=12, input_is_bgr=True):
-    if not _HAVE_PIL or not frames:
+def _save_gif_from_frames(frames_rgb, gif_path, fps=8):
+    if not _HAVE_PIL or not frames_rgb:
         return False
 
     pil_frames = []
-    for fr in frames:
+    for fr in frames_rgb:
         if fr is None:
             continue
 
         if fr.dtype != np.uint8:
             fr = np.clip(fr, 0, 255).astype(np.uint8)
-
-        if input_is_bgr:
-            fr = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
 
         pil_img = Image.fromarray(fr).convert("P", palette=Image.ADAPTIVE, colors=256)
         pil_frames.append(pil_img)
@@ -123,6 +103,15 @@ def _save_gif_from_frames(frames, gif_path, fps=12, input_is_bgr=True):
     return True
 
 
+def _offset_contour(cnt, dx, dy, w, h):
+    pts = cnt.reshape(-1, 2).astype(np.float32)
+    pts[:, 0] += float(dx)
+    pts[:, 1] += float(dy)
+    pts[:, 0] = np.clip(pts[:, 0], 0, max(0, w - 1))
+    pts[:, 1] = np.clip(pts[:, 1], 0, max(0, h - 1))
+    return pts.astype(np.int32).reshape(-1, 1, 2)
+
+
 def _build_wireframe_frame(
     img,
     w,
@@ -136,7 +125,9 @@ def _build_wireframe_frame(
     kmeans_k=6,
     base_alpha=0.78,
     region_min_area_ratio=130,
-    region_thickness=2
+    region_thickness=2,
+    animate_lines=False,
+    frame_phase=0.0
 ):
     ih, iw = img.shape[:2]
 
@@ -146,6 +137,7 @@ def _build_wireframe_frame(
 
     rng = np.random.default_rng(seed)
 
+    # База
     base = img.copy()
     smooth = cv2.bilateralFilter(base, d=11, sigmaColor=95, sigmaSpace=95)
     smooth = cv2.GaussianBlur(smooth, (0, 0), 0.8)
@@ -153,11 +145,13 @@ def _build_wireframe_frame(
     quantized = _posterize_kmeans(smooth, k=kmeans_k, seed=seed)
     result = cv2.addWeighted(quantized, base_alpha, base, 1.0 - base_alpha, 0)
 
+    # Лёгкое смещение каналов
     b, g, r = cv2.split(result)
     b = _shift_channel(b, -1, 0)
     r = _shift_channel(r, 1, 0)
     result = cv2.merge([b, g, r])
 
+    # Крупные области
     unique_colors = np.unique(quantized.reshape(-1, 3), axis=0)
     area_min = max(50, (iw * ih) // int(region_min_area_ratio))
 
@@ -209,9 +203,17 @@ def _build_wireframe_frame(
                 lineType=cv2.LINE_AA
             )
 
+    # Wireframe-линии
     gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (0, 0), 1.2)
     gray = cv2.bilateralFilter(gray, d=7, sigmaColor=65, sigmaSpace=65)
+
+    # Для GIF чуть “дышим” порогами, чтобы линии менялись
+    if animate_lines:
+        edge_thresh1 = int(round(edge_thresh1 + 4.0 * math.sin(frame_phase * 2.1 + 0.7)))
+        edge_thresh2 = int(round(edge_thresh2 + 7.0 * math.cos(frame_phase * 1.7 + 1.2)))
+        min_line_length = max(10, int(round(min_line_length + 2.5 * math.sin(frame_phase * 2.7 + 0.4))))
+        poly_epsilon = max(0.002, poly_epsilon * (1.0 + 0.14 * math.sin(frame_phase * 2.4 + 0.9)))
 
     edges = cv2.Canny(gray, edge_thresh1, edge_thresh2)
     edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
@@ -241,6 +243,7 @@ def _build_wireframe_frame(
 
         line_color = wire_palette[(idx + seed) % len(wire_palette)].tolist()
 
+        # Основная линия
         cv2.polylines(
             result,
             [approx],
@@ -259,6 +262,36 @@ def _build_wireframe_frame(
             lineType=cv2.LINE_AA
         )
 
+        # Для GIF: дополнительный дрожащий слой линий, чтобы они реально "жили"
+        if animate_lines:
+            dx = int(round(math.sin(frame_phase * 3.2 + idx * 0.19) * 1.5))
+            dy = int(round(math.cos(frame_phase * 2.8 + idx * 0.13) * 1.5))
+            jittered = _offset_contour(approx, dx, dy, iw, ih)
+
+            alt_color = wire_palette[(idx + seed + 2) % len(wire_palette)].tolist()
+            alt_thickness = max(1, thickness - 1)
+
+            cv2.polylines(
+                result,
+                [jittered],
+                isClosed=False,
+                color=alt_color,
+                thickness=alt_thickness,
+                lineType=cv2.LINE_AA
+            )
+
+            # Микро-искра/подсветка, чтобы было ближе к комикс-анимации
+            if (idx + seed) % 5 == 0:
+                cv2.polylines(
+                    result,
+                    [jittered],
+                    isClosed=False,
+                    color=(255, 255, 255),
+                    thickness=1,
+                    lineType=cv2.LINE_AA
+                )
+
+    # Зерно и полутон
     h_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
 
     noise = rng.normal(0, 7, (ih, iw, 3)).astype(np.int16)
@@ -278,6 +311,7 @@ def _build_wireframe_frame(
 
     result = np.where(dot_mask[..., None] > 0, (result * 0.90).astype(np.uint8), result)
 
+    # Виньетка
     yy, xx = np.indices((ih, iw), dtype=np.float32)
     cx, cy = iw / 2.0, ih / 2.0
     dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
@@ -286,6 +320,8 @@ def _build_wireframe_frame(
     vignette = 1.0 - 0.18 * (dist ** 1.6)
     result = np.clip(result.astype(np.float32) * vignette[..., None], 0, 255).astype(np.uint8)
 
+    # Возвращаем RGB, чтобы обычное сохранение через PIL было с правильными цветами.
+    result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
     return result
 
 
@@ -325,54 +361,40 @@ def apply_wireframe(
         kmeans_k=kmeans_k,
         base_alpha=base_alpha,
         region_min_area_ratio=region_min_area_ratio,
-        region_thickness=region_thickness
+        region_thickness=region_thickness,
+        animate_lines=False,
+        frame_phase=0.0
     )
 
+    # GIF: статичная картинка, но линии меняются от кадра к кадру
     if make_gif and out_dir and base_name and not _is_video_source(source_path):
         frames = []
-        total = max(18, int(gif_frames) * 2)
+        total = max(8, int(gif_frames) * 2)
 
         for i in range(total):
-            t = i / total
-            phase = 2.0 * math.pi * t
-
-            zoom = 1.0 + 0.012 * math.sin(phase + math.pi * 0.5)
-            dx = 0.8 * math.sin(phase * 0.5 + 1.1)
-            dy = 7.0 * math.sin(phase) + 2.0 * math.sin(phase * 2.0 + 0.7)
-            angle = 0.12 * math.sin(phase * 0.5 + 0.3)
-
-            camera_img = _apply_camera_transform(
-                img,
-                zoom=zoom,
-                dx=dx,
-                dy=dy,
-                angle=angle
-            )
-
-            edge1 = edge_thresh1 + 4.0 * math.sin(phase + 0.2)
-            edge2 = edge_thresh2 + 6.0 * math.sin(phase + 1.4)
-            line_len = max(10, int(round(min_line_length + 3.0 * math.sin(phase + 0.8))))
-            poly = max(0.002, poly_epsilon * (1.0 + 0.18 * math.sin(phase + 2.1)))
+            phase = (2.0 * math.pi * i) / max(1, total)
 
             frame = _build_wireframe_frame(
-                camera_img,
+                img,
                 w=w,
                 h=h,
                 seed=seed + i * 17,
-                edge_thresh1=int(round(edge1)),
-                edge_thresh2=int(round(edge2)),
-                min_line_length=line_len,
-                poly_epsilon=poly,
+                edge_thresh1=edge_thresh1,
+                edge_thresh2=edge_thresh2,
+                min_line_length=min_line_length,
+                poly_epsilon=poly_epsilon,
                 thickness=thickness,
                 kmeans_k=kmeans_k,
                 base_alpha=base_alpha,
                 region_min_area_ratio=region_min_area_ratio,
-                region_thickness=region_thickness
+                region_thickness=region_thickness,
+                animate_lines=True,
+                frame_phase=phase
             )
 
             frames.append(frame)
 
         gif_path = Path(out_dir) / f"{Path(base_name).stem}_wireframe.gif"
-        _save_gif_from_frames(frames, gif_path, fps=18, input_is_bgr=True)
+        _save_gif_from_frames(frames, gif_path, fps=10)
 
     return result
