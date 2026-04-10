@@ -32,7 +32,7 @@ from .mode_30_neon import apply_neon
 from .mode_31_drift import apply_drift
 from .mode_32_underwater import apply_underwater
 from .mode_33_gradient import apply_gradient
-from .mode_34_colorize import apply_colorize
+from .mode_34_ledscreen import apply_ledscreen
 from .mode_35_risograph import apply_risograph
 from .mode_36_coloredge import apply_coloredge
 from .mode_37_wireframe import apply_wireframe
@@ -72,7 +72,7 @@ EFFECTS = {
     31: apply_drift,
     32: apply_underwater,
     33: apply_gradient,
-    34: apply_colorize,
+    34: apply_ledscreen,
     35: apply_risograph,
     36: apply_coloredge,
     37: apply_wireframe,
