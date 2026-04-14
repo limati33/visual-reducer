@@ -366,35 +366,35 @@ def apply_wireframe(
         frame_phase=0.0
     )
 
-    # GIF: статичная картинка, но линии меняются от кадра к кадру
-    if make_gif and out_dir and base_name and not _is_video_source(source_path):
-        frames = []
-        total = max(8, int(gif_frames) * 2)
+    # # GIF: статичная картинка, но линии меняются от кадра к кадру
+    # if make_gif and out_dir and base_name and not _is_video_source(source_path):
+    #     frames = []
+    #     total = max(8, int(gif_frames) * 2)
 
-        for i in range(total):
-            phase = (2.0 * math.pi * i) / max(1, total)
+    #     for i in range(total):
+    #         phase = (2.0 * math.pi * i) / max(1, total)
 
-            frame = _build_wireframe_frame(
-                img,
-                w=w,
-                h=h,
-                seed=seed + i * 17,
-                edge_thresh1=edge_thresh1,
-                edge_thresh2=edge_thresh2,
-                min_line_length=min_line_length,
-                poly_epsilon=poly_epsilon,
-                thickness=thickness,
-                kmeans_k=kmeans_k,
-                base_alpha=base_alpha,
-                region_min_area_ratio=region_min_area_ratio,
-                region_thickness=region_thickness,
-                animate_lines=True,
-                frame_phase=phase
-            )
+    #         frame = _build_wireframe_frame(
+    #             img,
+    #             w=w,
+    #             h=h,
+    #             seed=seed + i * 17,
+    #             edge_thresh1=edge_thresh1,
+    #             edge_thresh2=edge_thresh2,
+    #             min_line_length=min_line_length,
+    #             poly_epsilon=poly_epsilon,
+    #             thickness=thickness,
+    #             kmeans_k=kmeans_k,
+    #             base_alpha=base_alpha,
+    #             region_min_area_ratio=region_min_area_ratio,
+    #             region_thickness=region_thickness,
+    #             animate_lines=True,
+    #             frame_phase=phase
+    #         )
 
-            frames.append(frame)
+    #         frames.append(frame)
 
-        gif_path = Path(out_dir) / f"{Path(base_name).stem}_wireframe.gif"
-        _save_gif_from_frames(frames, gif_path, fps=10)
+    #     gif_path = Path(out_dir) / f"{Path(base_name).stem}_wireframe.gif"
+    #     _save_gif_from_frames(frames, gif_path, fps=10)
 
     return result

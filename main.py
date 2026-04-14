@@ -23,6 +23,36 @@ BLUE = Fore.BLUE
 
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
 
+def collect_input_paths(args):
+    input_paths = []
+    buffer = []
+
+    for a in args:
+        part = a.strip('"').strip("'")
+        if not part:
+            continue
+
+        # если начали собирать путь — добавляем кусок
+        buffer.append(part)
+        candidate = " ".join(buffer)
+        resolved = resolve_shortcut(candidate)
+
+        if os.path.isfile(resolved):
+            input_paths.append(resolved)
+            buffer = []
+
+    # на случай, если что-то осталось несобранным
+    if buffer:
+        candidate = " ".join(buffer)
+        resolved = resolve_shortcut(candidate)
+        if os.path.isfile(resolved):
+            input_paths.append(resolved)
+        else:
+            print(f"{YELLOW}Внимание: '{candidate}' → не найден или не файл — пропущен.{RESET}")
+
+    return input_paths
+
+
 def is_video(path):
     _, ext = os.path.splitext(path)
     return ext.lower() in VIDEO_EXTENSIONS
@@ -35,26 +65,10 @@ def main():
 
     # --- Получаем аргументы ---
     # Убираем лишние кавычки, которые Windows иногда добавляет при "Открыть с помощью..."
-    args = [a.strip('"') for a in sys.argv[1:]]
-    input_paths = []
+    args = sys.argv[1:]
+    args = [a.strip('"').strip("'") for a in args]
+    input_paths = collect_input_paths(args)
 
-    # --- Сбор файлов ---
-    if args:
-        for a in args:
-            resolved = resolve_shortcut(a)
-            if os.path.isfile(resolved):
-                input_paths.append(resolved)
-            else:
-                print(f"{YELLOW}Внимание: '{a}' → не найден или не файл — пропущен.{RESET}")
-    else:
-        # Только если аргументов нет, вызываем диалог выбора
-        raw_paths = select_images_via_dialog(multi=True)
-        for p in raw_paths:
-            resolved = resolve_shortcut(p)
-            if os.path.isfile(resolved):
-                input_paths.append(resolved)
-            else:
-                print(f"{YELLOW}Пропущен: {p}{RESET}")
 
     if not input_paths:
         print(f"{RED}Файлы не выбраны. Выход.{RESET}")
