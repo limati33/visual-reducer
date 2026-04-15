@@ -23,32 +23,51 @@ BLUE = Fore.BLUE
 
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
 
+
 def collect_input_paths(args):
     input_paths = []
-    buffer = []
 
     for a in args:
-        part = a.strip('"').strip("'")
+        part = str(a).strip('"').strip("'").strip()
         if not part:
             continue
 
-        # если начали собирать путь — добавляем кусок
-        buffer.append(part)
-        candidate = " ".join(buffer)
-        resolved = resolve_shortcut(candidate)
-
-        if os.path.isfile(resolved):
-            input_paths.append(resolved)
-            buffer = []
-
-    # на случай, если что-то осталось несобранным
-    if buffer:
-        candidate = " ".join(buffer)
-        resolved = resolve_shortcut(candidate)
+        resolved = resolve_shortcut(part)
         if os.path.isfile(resolved):
             input_paths.append(resolved)
         else:
-            print(f"{YELLOW}Внимание: '{candidate}' → не найден или не файл — пропущен.{RESET}")
+            print(f"{YELLOW}Внимание: '{part}' → не найден или не файл — пропущен.{RESET}")
+
+    return input_paths
+
+
+def get_input_paths():
+    # 1) Сначала пробуем аргументы командной строки
+    args = [a.strip('"').strip("'") for a in sys.argv[1:]]
+    input_paths = collect_input_paths(args)
+
+    if input_paths:
+        return input_paths
+
+    # 2) Если аргументов нет — открываем диалог выбора
+    try:
+        selected = select_images_via_dialog()
+    except Exception as e:
+        print(f"{RED}Не удалось открыть диалог выбора файлов: {e}{RESET}")
+        return []
+
+    if not selected:
+        return []
+
+    if isinstance(selected, str):
+        selected = [selected]
+
+    for p in selected:
+        resolved = resolve_shortcut(p)
+        if os.path.isfile(resolved):
+            input_paths.append(resolved)
+        else:
+            print(f"{YELLOW}Внимание: '{p}' → не найден или не файл — пропущен.{RESET}")
 
     return input_paths
 
@@ -63,87 +82,74 @@ def main():
     print(f"{MAGENTA}{'=' * 40}{RESET}")
     show_effects_table()
 
-    # --- Получаем аргументы ---
-    # Убираем лишние кавычки, которые Windows иногда добавляет при "Открыть с помощью..."
-    args = sys.argv[1:]
-    args = [a.strip('"').strip("'") for a in args]
-    input_paths = collect_input_paths(args)
-
+    input_paths = get_input_paths()
 
     if not input_paths:
         print(f"{RED}Файлы не выбраны. Выход.{RESET}")
         return
-    
+
     print(f"{CYAN}Выбрано:{RESET} {len(input_paths)} файл(ов)")
     for i, p in enumerate(input_paths, 1):
         print(f"  {i}. {os.path.basename(p)}")
-    
+
     # --- Ввод параметров ---
     ncolors_input = input(f"{YELLOW}Количество цветов (2–512 или 'all' или 'no limit'): {RESET}").strip()
     n_colors_list = parse_int_list(ncolors_input, 2, 512)
 
-    # === FIX: Обработка режима "no limit" ===
     if n_colors_list is None:
         print("Режим: без ограничения количества цветов")
-        n_colors_iter = [None]     # ← FIX (делаем итератор)
-        n_colors_count = 1         # ← FIX
+        n_colors_iter = [None]
+        n_colors_count = 1
     elif not n_colors_list:
         return
     else:
         print("Будут использованы цвета:", n_colors_list)
         n_colors_iter = n_colors_list
         n_colors_count = len(n_colors_list)
-    # =========================================
 
     scale = ask_float("Масштаб (1 = оригинал, 0.1–2.0): ", 0.1, 2.0)
-    
+
     blur_input = input(f"{YELLOW}Размытие (0–5) [Видео использует 1 значение]: {RESET}").strip()
     blur_list = parse_int_list(blur_input, 0, 5)
-    if not blur_list: return
-    
+    if not blur_list:
+        return
+
     max_mode = max(EFFECTS.keys())
     modes_input = input(f"{YELLOW}Тип эффекта (1–{max_mode} или 'all', можно комбинации '9+12'): {RESET}").strip()
     modes_list = parse_mode_list(modes_input, 1, max_mode)
-    if not modes_list: return
-    
+    if not modes_list:
+        return
+
     # --- Запуск обработки ---
     start_time = time.time()
-    
+
     for idx_path, path in enumerate(input_paths, 1):
         print(f"\n{BOLD}{BLUE}>>> Файл {idx_path}/{len(input_paths)}: {os.path.basename(path)}{RESET}")
-        
+
         if is_video(path):
-
-            # === FIX: корректный подсчёт задач ===
             total_v_tasks = n_colors_count * len(blur_list) * len(modes_list)
-            # =====================================
-
             current_v_task = 0
 
             print(f"{MAGENTA}Режим ВИДЕО: Запланировано {total_v_tasks} вариант(а/ов).{RESET}")
             print(f"{YELLOW}ВНИМАНИЕ: Обработка видео долгая. Наберитесь терпения.{RESET}")
 
-            for n_colors in n_colors_iter:   # ← FIX
+            for n_colors in n_colors_iter:
                 for blur_strength in blur_list:
                     for mode in modes_list:
                         current_v_task += 1
                         print(f"\n{BOLD}{CYAN}>>> Видео-вариант {current_v_task}/{total_v_tasks}{RESET}")
                         print(f"Параметры: Цветов={n_colors}, Размытие={blur_strength}, Эффект={mode}")
-                        
+
                         try:
                             process_video(path, n_colors, scale, blur_strength, mode)
                         except Exception as e:
                             print(f"{RED}Ошибка видео: {e}{RESET}")
                             log_error("Ошибка видео", e, path, n_colors, blur_strength, mode)
-                
         else:
-            # Фото
-            # === FIX: корректный подсчёт задач ===
             local_tasks = n_colors_count * len(blur_list) * len(modes_list)
-            # ======================================
             completed_local = 0
-            
-            for n_colors in n_colors_iter:   # ← FIX
+
+            for n_colors in n_colors_iter:
                 for blur_strength in blur_list:
                     for mode in modes_list:
                         completed_local += 1

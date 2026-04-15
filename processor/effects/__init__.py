@@ -37,6 +37,7 @@ from .mode_35_risograph import apply_risograph
 from .mode_36_coloredge import apply_coloredge
 from .mode_37_wireframe import apply_wireframe
 from .mode_38_bufferglitch import apply_bufferglitch
+from .mode_39_liquidmetal import apply_liquidmetal
 
 EFFECTS = {
     1: apply_poster,
@@ -76,7 +77,8 @@ EFFECTS = {
     35: apply_risograph,
     36: apply_coloredge,
     37: apply_wireframe,
-    38: apply_bufferglitch
+    38: apply_bufferglitch,
+    39: apply_liquidmetal
 }
 
 

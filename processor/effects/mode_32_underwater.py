@@ -36,8 +36,6 @@ def _get_radial_mask(w, h):
     return mask
 
 def apply_underwater(img, w=None, h=None, out_dir=None, base_name=None):
-    if img is None:
-        return None
 
     # Сохраняем исходник, чтобы при желании можно было смешать обратно
     original = img.copy()
@@ -68,46 +66,58 @@ def apply_underwater(img, w=None, h=None, out_dir=None, base_name=None):
     map_y = (base_map_y + shift_y).astype(np.float32)
 
     submerged = cv2.remap(
-        img, map_x, map_y,
+        img,
+        map_x,
+        map_y,
         interpolation=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_REFLECT
     )
 
-    # 2) Мягкий underwater tint без сильного ухода в жёлтый
+    # 2) Подводный оттенок (RGB)
     submerged = submerged.astype(np.float32)
+
     blue_boost = 1.10 + 0.04 * np.sin(phase * 1.3)
     green_mul = 0.88 + 0.02 * np.sin(phase * 1.1 + 1.0)
     red_mul = 0.62 + 0.02 * np.sin(phase * 0.9 + 2.0)
 
-    submerged[:, :, 0] *= blue_boost
+    # RGB: 0=R, 1=G, 2=B
+    submerged[:, :, 0] *= red_mul
     submerged[:, :, 1] *= green_mul
-    submerged[:, :, 2] *= red_mul
+    submerged[:, :, 2] *= blue_boost
+
     submerged = np.clip(submerged, 0, 255).astype(np.uint8)
 
-    # 3) Каустика — только в яркость, а не в цвет
+    # 3) Каустика — только в яркость
     caustic_pattern = (
         np.sin((base_map_x * 0.018 + base_map_y * 0.022) + phase * 2.2)
         + 0.5 * np.sin((base_map_x * 0.035 - base_map_y * 0.012) + phase * 1.6)
     )
-    caustic_norm = (caustic_pattern - caustic_pattern.min()) / (np.ptp(caustic_pattern) + 1e-8)
+
+    caustic_norm = (caustic_pattern - caustic_pattern.min()) / (
+        np.ptp(caustic_pattern) + 1e-8
+    )
     caustic = (caustic_norm * 255).astype(np.uint8)
 
     k = max(3, (w // 20) | 1)
     caustic = cv2.GaussianBlur(caustic, (k, k), 0)
     caustic = cv2.normalize(caustic, None, 0, 45, cv2.NORM_MINMAX)
 
-    # Добавляем каустику в L-канал (яркость), сохраняем цвет
-    lab = cv2.cvtColor(submerged, cv2.COLOR_BGR2LAB)
+    # Работаем в LAB через RGB-конвертацию
+    lab = cv2.cvtColor(submerged, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
+
     l = cv2.add(l, caustic)
+
     lab = cv2.merge([l, a, b])
-    submerged = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    submerged = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
-    # 4) Виньетка/глубина
+    # 4) Виньетка / глубина
     mask = _get_radial_mask(w, h)
-    submerged = (submerged.astype(np.float32) * mask[:, :, np.newaxis]).astype(np.uint8)
+    submerged = (
+        submerged.astype(np.float32) * mask[:, :, np.newaxis]
+    ).astype(np.uint8)
 
-    # 5) Если нужно совсем чуть-чуть вернуть оригинальные цвета:
+    # 5) Лёгкое возвращение оригинальных цветов (по желанию)
     # submerged = cv2.addWeighted(original, 0.10, submerged, 0.90, 0)
 
     return submerged
