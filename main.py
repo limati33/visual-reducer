@@ -26,17 +26,29 @@ VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
 
 def collect_input_paths(args):
     input_paths = []
+    temp_parts = []
 
     for a in args:
         part = str(a).strip('"').strip("'").strip()
         if not part:
             continue
 
-        resolved = resolve_shortcut(part)
+        # Добавляем кусок пути в буфер
+        temp_parts.append(part)
+        # Пытаемся склеить всё, что накопилось в буфере, через пробел
+        joined_path = " ".join(temp_parts)
+        
+        resolved = resolve_shortcut(joined_path)
+        
         if os.path.isfile(resolved):
+            # Если склеенный путь оказался реальным файлом — берём его!
             input_paths.append(resolved)
-        else:
-            print(f"{YELLOW}Внимание: '{part}' → не найден или не файл — пропущен.{RESET}")
+            temp_parts = []  # Очищаем буфер для следующего файла
+            
+    # Если цикл закончился, а в буфере что-то осталось (путь так и не собрался)
+    if temp_parts:
+        failed_path = " ".join(temp_parts)
+        print(f"{YELLOW}Внимание: '{failed_path}' → не найден или не файл — пропущен.{RESET}")
 
     return input_paths
 

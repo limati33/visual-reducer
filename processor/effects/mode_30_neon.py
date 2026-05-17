@@ -9,7 +9,6 @@ def apply_neon(img, w=None, h=None, out_dir=None, base_name=None):
     Толщина и яркость линий зависят от силы контура.
     Внешние контуры — жирные и яркие, внутренние детали — тонкие.
     """
-    if img is None: return None
     
     # 1. Ресайз
     img_h, img_w = img.shape[:2]
