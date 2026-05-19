@@ -2,12 +2,12 @@ import tkinter as tk
 from tkinter import filedialog
 from .logging_utils import log_error, CYAN, RESET
 
-def select_images_via_dialog(multi=False):
+def select_images_via_dialog(multi=True):
     try:
-        root = tk.Tk(); root.withdraw(); root.update()
-        print(f"{CYAN}Выбор файлов...{RESET}")
-        
-        # Обновленный список форматов
+        root = tk.Tk()
+        root.withdraw()
+        root.update()
+
         file_types = [
             ("Media files", "*.png *.jpg *.jpeg *.bmp *.webp *.tiff *.mp4 *.avi *.mov *.mkv *.webm"),
             ("Images", "*.png *.jpg *.jpeg *.bmp *.webp *.tiff"),
@@ -21,9 +21,8 @@ def select_images_via_dialog(multi=False):
         else:
             path = filedialog.askopenfilename(title="Выберите файл", filetypes=file_types)
             return [path] if path else []
-    except Exception as e:
-        log_error("Диалог", e)
-        return []
     finally:
-        try: root.destroy()
-        except: pass
+        try:
+            root.destroy()
+        except:
+            pass
