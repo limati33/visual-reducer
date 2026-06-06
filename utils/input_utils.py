@@ -51,7 +51,7 @@ def parse_int_list(text, min_v, max_v):
     for part in parts:
 
         # r / random / 0
-        if part in ("r", "random", "0"):
+        if part in ("r", "random"):
             result.add(random.randint(min_v, max_v))
             continue
 
