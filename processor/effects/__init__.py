@@ -38,7 +38,7 @@ from .mode_36_coloredge import apply_coloredge
 from .mode_37_wireframe import apply_wireframe
 from .mode_38_bufferglitch import apply_bufferglitch
 from .mode_39_liquidmetal import apply_liquidmetal
-from .mode_40_embroidery import apply_fire_v2
+from .mode_40_quadplates import apply_quadplates
 
 EFFECTS = {
     1: apply_poster,
@@ -80,7 +80,7 @@ EFFECTS = {
     37: apply_wireframe,
     38: apply_bufferglitch,
     39: apply_liquidmetal,
-    40: apply_fire_v2
+    40: apply_quadplates
 }
 
 
