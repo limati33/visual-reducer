@@ -39,7 +39,16 @@ from .mode_37_wireframe import apply_wireframe
 from .mode_38_bufferglitch import apply_bufferglitch
 from .mode_39_liquidmetal import apply_liquidmetal
 from .mode_40_quadplates import apply_quadplates
-from .mode_41_graffiti import apply_graffiti
+from .mode_41_zdepth import apply_zdepth
+from .mode_42_solarize import apply_solarize
+from .mode_43_engraving import apply_engraving
+from .mode_44_chromaticaberration import apply_chromaticaberration # Нужно полностью другое
+from .mode_45_topolines import apply_topolines # Нужно полностью другое
+from .mode_46_oscilloscope import apply_oscilloscope
+from .mode_47_delaunay import apply_delaunay
+from .mode_48_crossstitch import apply_crossstitch
+from .mode_49_marble import apply_marble
+from .mode_50_frost import apply_frost # Нужно полностью другое
 
 EFFECTS = {
     1: apply_poster,
@@ -82,7 +91,16 @@ EFFECTS = {
     38: apply_bufferglitch,
     39: apply_liquidmetal,
     40: apply_quadplates,
-    41: apply_graffiti
+    41: apply_zdepth,
+    42: apply_solarize,
+    43: apply_engraving,
+    44: apply_chromaticaberration,
+    45: apply_topolines,
+    46: apply_oscilloscope,
+    47: apply_delaunay,
+    48: apply_crossstitch,
+    49: apply_marble,
+    50: apply_frost
 }
 
 

@@ -120,7 +120,7 @@ def process_single(image_path, n_colors, scale, blur_strength, mode, out_dir=Non
             # единичный режим
             if isinstance(mode_item, int):
                 fn = get_effect(mode_item)
-                return fn(img, w, h, out_dir, base_name)
+                return fn(img, w, h, out_dir, base_name, palette=palette)
             # последовательность режимов
             elif isinstance(mode_item, (list, tuple)):
                 for m in mode_item:
