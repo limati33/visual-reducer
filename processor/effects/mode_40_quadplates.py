@@ -3,8 +3,8 @@ import numpy as np
 
 def apply_quadplates(img, w=None, h=None, out_dir=None, base_name=None):
     """
-    Mode 40: Полупрозрачные ориентированные четырехугольники по цветовым сегментам
-    Вариант с более мелкими фрагментами и без подмешивания оригинала.
+    Mode 40: Полупрозрачные ориентированные четырехугольники
+    Оригинал удален из фона. Фигуры стакаются друг на друга.
     """
     if img is None:
         return None
@@ -21,8 +21,8 @@ def apply_quadplates(img, w=None, h=None, out_dir=None, base_name=None):
     lab = cv2.cvtColor(shifted, cv2.COLOR_BGR2LAB)
 
     Z = lab.reshape((-1, 3)).astype(np.float32)
+    K = 16  # Количество цветов
 
-    K = 32  # больше кластеров -> мельче сегменты
     _, labels, centers = cv2.kmeans(
         Z, K, None,
         (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0),
@@ -31,62 +31,46 @@ def apply_quadplates(img, w=None, h=None, out_dir=None, base_name=None):
     )
     labels = labels.reshape(lab.shape[:2])
 
-    # Итоговое изображение: только пластины, без оригинала
-    result = np.zeros_like(img)
+    # --- Создаем чистый холст вместо оригинального фото ---
+    canvas = np.zeros_like(img) # Черный фон
+    # canvas = np.full_like(img, 255) # Раскомментируй, если нужен белый фон
 
-    # Маска для отсечения пустот
-    quads_mask = np.zeros((h, w), dtype=np.uint8)
+    alpha = 0.65 # Прозрачность накладываемых фигур
 
-    rng = np.random.default_rng()
-
-    # Параметры "мелкости"
-    step = 6          # шаг сетки внутри сегмента
-    min_size = 4      # минимальный размер пластины
-    max_size = 10     # максимальный размер пластины
-
-    # Небольшая предобработка, чтобы убрать мусор
-    kernel = np.ones((3, 3), np.uint8)
-
+    # --- Обрабатываем сегменты и стакаем фигуры ---
     for i in range(K):
         mask = (labels == i).astype(np.uint8) * 255
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < 40:
+            if cv2.contourArea(cnt) < 40:
                 continue
 
-            # Средний цвет сегмента
+            # Находим габариты и поворот
+            rect = cv2.minAreaRect(cnt)
+            box = cv2.boxPoints(rect)
+            box = np.int32(box)
+
+            # Вычисляем цвет
             cnt_mask = np.zeros((h, w), dtype=np.uint8)
             cv2.drawContours(cnt_mask, [cnt], -1, 255, -1)
             mean_bgr = cv2.mean(img, mask=cnt_mask)[:3]
-            color = tuple(int(c) for c in mean_bgr)
+            color = [int(c) for c in mean_bgr]
 
-            # Ограничивающий прямоугольник сегмента
-            x, y, cw, ch = cv2.boundingRect(cnt)
+            # Создаем маску конкретно для этого четырехугольника
+            quad_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(quad_mask, [box], 255)
 
-            # Заполняем сегмент множеством мелких повернутых четырехугольников
-            for py in range(y, y + ch, step):
-                for px in range(x, x + cw, step):
-                    if cv2.pointPolygonTest(cnt, (float(px), float(py)), False) < 0:
-                        continue
+            # Временный слой, на котором нарисована только одна текущая фигура
+            plate = np.zeros_like(img)
+            cv2.fillPoly(plate, [box], color)
 
-                    wq = int(rng.integers(min_size, max_size + 1))
-                    hq = int(rng.integers(min_size, max_size + 1))
-                    angle = float(rng.uniform(0, 180))
+            # Смешиваем текущий холст с новой фигурой с учетом прозрачности
+            blended = cv2.addWeighted(plate, alpha, canvas, 1 - alpha, 0)
 
-                    rect = ((float(px), float(py)), (float(wq), float(hq)), angle)
-                    box = cv2.boxPoints(rect).astype(np.int32)
+            # Обновляем холст ТОЛЬКО в пределах текущего четырехугольника
+            canvas = np.where(quad_mask[:, :, None] > 0, blended, canvas)
 
-                    cv2.fillPoly(result, [box], color)
-                    cv2.fillPoly(quads_mask, [box], 255)
-
-    # Если где-то остались дырки, можно слегка подстраховаться
-    # Но оригинал мы не добавляем вообще
-    if np.any(quads_mask == 0):
-        # Можно просто оставить черный фон в пустотах
-        pass
-
-    return result
+    return canvas

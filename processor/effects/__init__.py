@@ -39,6 +39,7 @@ from .mode_37_wireframe import apply_wireframe
 from .mode_38_bufferglitch import apply_bufferglitch
 from .mode_39_liquidmetal import apply_liquidmetal
 from .mode_40_quadplates import apply_quadplates
+from .mode_41_graffiti import apply_graffiti
 
 EFFECTS = {
     1: apply_poster,
@@ -80,7 +81,8 @@ EFFECTS = {
     37: apply_wireframe,
     38: apply_bufferglitch,
     39: apply_liquidmetal,
-    40: apply_quadplates
+    40: apply_quadplates,
+    41: apply_graffiti
 }
 
 
