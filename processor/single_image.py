@@ -13,6 +13,7 @@ from utils.logging_utils import (
     GREEN, RESET, YELLOW, CYAN, RED, MAGENTA, BLUE
 )
 from processor.effects import get_effect
+import inspect
 
 
 def process_single(image_path, n_colors, scale, blur_strength, mode, out_dir=None, return_report=True):
@@ -117,15 +118,32 @@ def process_single(image_path, n_colors, scale, blur_strength, mode, out_dir=Non
             Если эффект вернул список (несколько картинок), возвращаем этот список сразу.
             """
             img = img_in
+            
+            # Вспомогательная функция для безопасного вызова
+            def call_effect(func, current_img):
+                # Читаем аргументы, которые принимает функция эффекта
+                sig = inspect.signature(func)
+                
+                # Проверяем, есть ли 'palette' среди параметров или поддерживает ли функция **kwargs
+                accepts_palette = 'palette' in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+                
+                if accepts_palette:
+                    return func(current_img, w, h, out_dir, base_name, palette=palette)
+                else:
+                    return func(current_img, w, h, out_dir, base_name)
+
             # единичный режим
             if isinstance(mode_item, int):
                 fn = get_effect(mode_item)
-                return fn(img, w, h, out_dir, base_name, palette=palette)
+                return call_effect(fn, img)
+                
             # последовательность режимов
             elif isinstance(mode_item, (list, tuple)):
                 for m in mode_item:
                     fn = get_effect(m)
-                    img = fn(img, w, h, out_dir, base_name)
+                    img = call_effect(fn, img)
                     # если эффект вернул список/несколько артов — прерываем и возвращаем как есть
                     if isinstance(img, list):
                         return img
